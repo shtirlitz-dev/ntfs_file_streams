@@ -33,5 +33,7 @@
 
 # intermediate and output dirs
 obj/
-x64/
-Win32/
+bin/
+
+# Visual Studio files
+.vs/
