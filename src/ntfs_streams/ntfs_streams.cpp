@@ -178,6 +178,7 @@ void ListFiles(const filesystem::path& dir, bool show_all_files)
 	ShowStreamsOnFile(dir, show_all_files, L".\\");
 
 	/*
+	we could use FindFirstFile/FindNextFile and get this info:
 	WIN32_FIND_DATA fd;
 	DWORD dwFileAttributes;
 	FILETIME ftCreationTime;
@@ -211,7 +212,7 @@ int CopyStream(const wchar_t* src, const wchar_t* dest)
 	if (!src || !dest)
 		throw invalid_argument("Specify source and destination stream");
 
-	// filesystem::copy_file does not work (considered as invalid parameter)
+	// filesystem::copy_file does not work properly (streams are considered as invalid parameter)
 	// auto res = filesystem::copy_file( src, dest );
 
 	FileSimple fs_src(src);
@@ -282,7 +283,7 @@ int EchoStream(const wchar_t* dest)
 	ULONGLONG total = 0;
 	while (getline(wcin, str))
 	{
-		str += L'\n';
+		str += L"\r\n";
 		string s = ToChar(str, CP_UTF8);
 		DWORD towrite = (DWORD)s.size();
 		DWORD written = fs_dest.Write(s.c_str(), towrite);
