@@ -105,6 +105,14 @@ wstring FileSizeStr(ULONGLONG fsize)
 	return sz;
 }
 
+wstring_view RemoveAtEnd(wstring_view str, wstring_view end)
+{
+	int diff = (int)str.size() - (int)end.size();
+	if (diff >= 0 && str.substr(diff) == end)
+		return str.substr(0, diff);
+	return str;
+}
+
 void ShowStreamsOnFile(const filesystem::path& filename, bool show_all_files, const wchar_t* prefix)
 {
 	// Enumerate file's streams and print their sizes and names
@@ -113,14 +121,11 @@ void ShowStreamsOnFile(const filesystem::path& filename, bool show_all_files, co
 	HANDLE hFind = ::FindFirstStreamW(filename.c_str(), FindStreamInfoStandard, &fsd, 0);
 	for (bool ok = hFind != INVALID_HANDLE_VALUE; ok; ok = !!::FindNextStreamW(hFind, &fsd))
 	{
-		if (wcscmp(fsd.cStreamName, L"::$DATA") == 0)
+		if (wcscmp(fsd.cStreamName, L"::$DATA") == 0) // this is the main stream
 			continue;
-		//if (!show_all_files && wcsncmp(fsd.cStreamName, L"::", 2) == 0)
-		//	continue;
-		if (show_all_files)
-			wcout << setw(35) << FileSizeStr(fsd.StreamSize.QuadPart) << L" " << fsd.cStreamName << endl;
-		else
-			wcout << setw(15) << FileSizeStr(fsd.StreamSize.QuadPart) << L" " << prefix << fsd.cStreamName << endl;
+		wstring_view stream_name = RemoveAtEnd(fsd.cStreamName, L":$DATA"); // name without ":$DATA" in the end
+		int space = show_all_files ? 35 : 15;
+		wcout << setw(space) << FileSizeStr(fsd.StreamSize.QuadPart) << L" " << prefix << stream_name << endl;
 	}
 	if (hFind != INVALID_HANDLE_VALUE)
 		::FindClose(hFind);
@@ -175,7 +180,6 @@ void ListFiles(const filesystem::path& dir, bool show_all_files)
 	}
 
 	wcout << L"Directory: " << dir.c_str() << endl << endl;
-	ShowStreamsOnFile(dir, show_all_files, L".\\");
 
 	/*
 	we could use FindFirstFile/FindNextFile and get this info:
@@ -188,11 +192,12 @@ void ListFiles(const filesystem::path& dir, bool show_all_files)
 	DWORD nFileSizeLow;
 	*/
 
+	ShowStreamsOnFile(dir, show_all_files, L".\\");
 	for (auto& item : filesystem::directory_iterator(dir))
 	{
 		if (show_all_files)
 			PrintInfo(item);
-		ShowStreamsOnFile(item.path(), show_all_files, show_all_files ? L"\t" : item.path().filename().c_str());
+		ShowStreamsOnFile(item.path(), show_all_files, item.path().filename().c_str());
 	}
 }
 
