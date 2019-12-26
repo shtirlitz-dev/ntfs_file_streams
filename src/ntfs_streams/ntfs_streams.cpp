@@ -23,6 +23,7 @@
 #include "UnicodeStream.h"
 #include "UnicodeFuncts.h"
 #include "Tar.h"
+#include "CommonFunc.h"
 
 using namespace std;
 
@@ -95,22 +96,6 @@ int wmain(int argc, TCHAR **argv) // main(int argc, char **argv)
 		wcerr << L"Unhandled exception" << endl;
 	}
 	return 1;
-}
-
-wstring FileSizeStr(ULONGLONG fsize)
-{
-	wstring sz = to_wstring(fsize);
-	for (int pos = (int)sz.size() - 3; pos > 0; pos -= 3)
-		sz.insert(pos, 1, ' ');
-	return sz;
-}
-
-wstring_view RemoveAtEnd(wstring_view str, wstring_view end)
-{
-	int diff = (int)str.size() - (int)end.size();
-	if (diff >= 0 && str.substr(diff) == end)
-		return str.substr(0, diff);
-	return str;
 }
 
 void ShowStreamsOnFile(const filesystem::path& filename, bool show_all_files, const wchar_t* prefix)
