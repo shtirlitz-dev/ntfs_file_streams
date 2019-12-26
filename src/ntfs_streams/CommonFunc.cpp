@@ -66,16 +66,14 @@ wchar_t char_upper(wchar_t ch)
 bool mask_match(const wchar_t* str, const wchar_t* mask)
 {
 	while (*mask) {
-		char tpl = *mask++;
+		wchar_t tpl = *mask++;
 		switch (tpl) {
 		case '*':
-			switch (*mask)
-			{
+			switch (*mask) {
 			case 0: return true; // любое окончание data
 			case '*': continue; // 2 or more * 
 			default: // str must contain remainder of wildcard
-				while (*str)
-				{
+				while (*str) {
 					if (mask_match(str, mask))
 						return true;
 					str++;

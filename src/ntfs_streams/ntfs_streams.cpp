@@ -24,6 +24,7 @@
 #include "UnicodeFuncts.h"
 #include "Tar.h"
 #include "CommonFunc.h"
+#include "ConsoleColor.h"
 
 using namespace std;
 
@@ -72,6 +73,7 @@ int wmain(int argc, TCHAR **argv) // main(int argc, char **argv)
 	}
 	catch (MyException& e)
 	{
+		ConsoleColor cc(FOREGROUND_RED, STD_ERROR_HANDLE);
 		wstring msg = e.msg;
 		if (auto pos = msg.find(L"<err>"); pos != wstring::npos)
 			msg = msg.substr(0, pos) + GetErrorMessage(e.dwError) + msg.substr(pos + 5);
@@ -89,10 +91,12 @@ int wmain(int argc, TCHAR **argv) // main(int argc, char **argv)
 	//}
 	catch (exception& e)
 	{
+		ConsoleColor cc(FOREGROUND_RED, STD_ERROR_HANDLE);
 		wcerr << ToWideChar(e.what(), CP_ACP) << endl;
 	}
 	catch (...)
 	{
+		ConsoleColor cc(FOREGROUND_RED, STD_ERROR_HANDLE);
 		wcerr << L"Unhandled exception" << endl;
 	}
 	return 1;
@@ -110,7 +114,10 @@ void ShowStreamsOnFile(const filesystem::path& filename, bool show_all_files, co
 			continue;
 		wstring_view stream_name = RemoveAtEnd(fsd.cStreamName, L":$DATA"); // name without ":$DATA" in the end
 		int space = show_all_files ? 35 : 15;
-		wcout << setw(space) << FileSizeStr(fsd.StreamSize.QuadPart) << L" " << prefix << stream_name << endl;
+		wcout << setw(space) << FileSizeStr(fsd.StreamSize.QuadPart) << L" " << prefix;
+		//ConsoleColor cc(FOREGROUND_BLUE | FOREGROUND_INTENSITY);
+		ConsoleColor cc(FOREGROUND_GREEN | FOREGROUND_BLUE);
+		wcout << stream_name << endl;
 	}
 	if (hFind != INVALID_HANDLE_VALUE)
 		::FindClose(hFind);
@@ -153,29 +160,19 @@ void ListFiles(const filesystem::path& dir, bool show_all_files)
 	if (!::GetVolumeInformation(root.c_str(), szVolName, MAX_PATH, &dwSN,
 		&dwMaxLen, &dwVolFlags, szFSName, MAX_PATH))
 	{
-		//throw MyException{ L"Cannot get volume information for '<path>': <err>", root.c_str(), GetLastError() };
+		ConsoleColor cc(FOREGROUND_RED);
 		wcout << L"Cannot get volume information for " << root.c_str() << endl;
 	}
 	else
 	{
 		wcout << root.c_str() << L" - Volume Name: " << szVolName << ", File System: " << szFSName << endl;
-		if (!(dwVolFlags & FILE_NAMED_STREAMS))
-			//throw MyException{ L"Named streams are not supported on '<path>'", root.c_str() };
+		if (!(dwVolFlags & FILE_NAMED_STREAMS)) {
+			ConsoleColor cc(FOREGROUND_RED);
 			wcout << L"Named streams are not supported on " << root.c_str() << endl;
+		}
 	}
 
 	wcout << L"Directory: " << dir.c_str() << endl << endl;
-
-	/*
-	we could use FindFirstFile/FindNextFile and get this info:
-	WIN32_FIND_DATA fd;
-	DWORD dwFileAttributes;
-	FILETIME ftCreationTime;
-	FILETIME ftLastAccessTime;
-	FILETIME ftLastWriteTime;
-	DWORD nFileSizeHigh;
-	DWORD nFileSizeLow;
-	*/
 
 	ShowStreamsOnFile(dir, show_all_files, L".\\");
 	for (auto& item : filesystem::directory_iterator(dir))

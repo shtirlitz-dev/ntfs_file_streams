@@ -168,6 +168,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="CommonFunc.h" />
+    <ClInclude Include="ConsoleColor.h" />
     <ClInclude Include="FileSimple.h" />
     <ClInclude Include="ntfs_streams.h" />
     <ClInclude Include="pch.h" />
@@ -177,6 +178,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="CommonFunc.cpp" />
+    <ClCompile Include="ConsoleColor.cpp" />
     <ClCompile Include="ntfs_streams.cpp" />
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>

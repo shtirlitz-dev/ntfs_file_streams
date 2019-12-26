@@ -19,6 +19,7 @@
 #include "ntfs_streams.h"
 #include "CommonFunc.h"
 #include "FileSimple.h"
+#include "ConsoleColor.h"
 #include <tchar.h>
 #include <iostream>
 
@@ -136,7 +137,7 @@ void TarFiles(ITarWriter * writer, experimental::generator<DirItem>&& items, con
 {
 	for (auto& it : items)
 	{
-		if (mask_match(it.name.c_str(), exclude))
+		if (mask_match(it.name.filename().c_str(), exclude))
 			continue;
 		switch (it.type)
 		{
@@ -150,12 +151,8 @@ void TarFiles(ITarWriter * writer, experimental::generator<DirItem>&& items, con
 			WriteTarStream(writer, it, rel_path, prefix);
 			break;
 		case DirItem::Invalid: {
-			//HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-			//CONSOLE_SCREEN_BUFFER_INFO bi;
-			//GetConsoleScreenBufferInfo(hStdOut, &bi);
-			//SetConsoleTextAttribute(hStdOut, FOREGROUND_RED| FOREGROUND_INTENSITY);
-			wcout << prefix << L"* " << it.name.filename().c_str() << L"  *** not found *** " << endl;
-			//SetConsoleTextAttribute(hStdOut, bi.wAttributes);
+			ConsoleColor cc(FOREGROUND_RED);
+			wcout << prefix << L"* " << it.name.c_str() << L"  *** not found *** " << endl;
 			}
 			break;
 		}
@@ -188,7 +185,8 @@ void WriteTarFile(ITarWriter * writer, const DirItem& item, const vector<wstring
 	FileSimple fs(item.name.c_str());
 	if (!fs.IsOpen())
 	{
-		wcout << prefix << L"* ********** error opening " << item.name << endl;
+		ConsoleColor cc(FOREGROUND_RED);
+		wcout << prefix << L"* " << item.name.c_str() << L"  *** failed to open *** " << endl;
 		return;
 	}
 	// GetFileInformationByHandle  BY_HANDLE_FILE_INFORMATION
@@ -208,7 +206,8 @@ void WriteTarStream(ITarWriter * writer, const DirItem& item, const filesystem::
 	FileSimple fs(fn.c_str());
 	if (!fs.IsOpen())
 	{
-		wcout << prefix << L"* ********** error opening " << fn << endl;
+		ConsoleColor cc(FOREGROUND_RED);
+		wcout << prefix << L"* " << fn << L"  *** failed to open *** " << endl;
 		return;
 	}
 }
