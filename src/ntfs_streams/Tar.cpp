@@ -91,8 +91,9 @@ namespace
 	class ITarWriter
 	{
 	public:
-		virtual void Write(const void* buf, DWORD size) = 0;
 		virtual ~ITarWriter() {}
+		virtual void Write(const void* buf, DWORD size) = 0;
+		virtual bool IsMyFile(const filesystem::path& path) { return false; }
 		ULONGLONG written_total = 0;
 	};
 
@@ -126,12 +127,9 @@ namespace
 }
 
 
-void WriteTarDirectory(ITarWriter * writer, const DirItem& item, const vector<wstring>& exclude,
-	const filesystem::path& rel_path, const wstring& prefix);
-void WriteTarFile(ITarWriter * writer, const DirItem& item,
-	const filesystem::path& rel_path, const wstring& prefix);
-//void WriteTarStream(ITarWriter * writer, const DirItem& item,
-//	const filesystem::path& rel_path, const wstring& prefix);
+void WriteTarDirectory(ITarWriter * writer, const DirItem& item, const vector<wstring>& exclude, const filesystem::path& rel_path, const wstring& prefix);
+void WriteTarFile(ITarWriter * writer, const DirItem& item, const vector<wstring>& exclude, const filesystem::path& rel_path, const wstring& prefix);
+void WriteTarStream(ITarWriter * writer, const DirItem& item, const filesystem::path& rel_path, const wstring& prefix);
 
 void TarFiles(ITarWriter * writer, experimental::generator<DirItem>&& items, const vector<wstring>& exclude,
 	const filesystem::path& rel_path, const wstring& prefix)
@@ -146,11 +144,20 @@ void TarFiles(ITarWriter * writer, experimental::generator<DirItem>&& items, con
 			WriteTarDirectory(writer, it, exclude, rel_path, prefix);
 			break;
 		case DirItem::File:
-		case DirItem::Stream:
-			WriteTarFile(writer, it, rel_path, prefix);
+			WriteTarFile(writer, it, exclude, rel_path, prefix);
 			break;
-//			WriteTarStream(writer, it, rel_path, prefix);
-//			break;
+		case DirItem::Stream:
+			WriteTarStream(writer, it, rel_path, prefix);
+			break;
+		case DirItem::Invalid: {
+			//HANDLE hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+			//CONSOLE_SCREEN_BUFFER_INFO bi;
+			//GetConsoleScreenBufferInfo(hStdOut, &bi);
+			//SetConsoleTextAttribute(hStdOut, FOREGROUND_RED| FOREGROUND_INTENSITY);
+			wcout << prefix << L"* " << it.name.filename().c_str() << L"  *** not found *** " << endl;
+			//SetConsoleTextAttribute(hStdOut, bi.wAttributes);
+			}
+			break;
 		}
 	}
 }
@@ -159,46 +166,52 @@ void WriteTarDirectory(ITarWriter * writer, const DirItem& item, const vector<ws
 	const filesystem::path& rel_path, const wstring& prefix)
 {
 	wcout << prefix << L"> " << item.name.filename().c_str() << endl;
-	TarFiles(writer, directory_items(item.name), exclude, rel_path / item.name.filename(), prefix + L"  ");
+//	TarFiles(writer, directory_items(item.name), exclude, rel_path / item.name.filename(), prefix + L"  ");
+	TarFiles(writer, get_files(item.name), exclude, rel_path / item.name.filename(), prefix + L"  ");
 	//wcout << L"end " << item.c_str() << endl;
 }
-void WriteTarFile(ITarWriter * writer, const DirItem& item,
-	const filesystem::path& rel_path, const wstring& prefix)
+
+void PrintFileData(const DirItem& item, const filesystem::path& rel_path, const wstring& prefix)
 {
 	//wcout << prefix << L"+ " << item.name.c_str() << endl;
 	//wcout << prefix << L"+ " << (rel_path / item.name.filename()).c_str() << endl;
 	wcout << prefix << L"+ " << item.name.filename().c_str() << L"   " << item.size << endl;
-	// if stream // directory name "dir\\:stream" -> "dir:stream"
-
-	wstring fn = item.name.c_str();
-	if (item.type == DirItem::File) {
-		WIN32_FILE_ATTRIBUTE_DATA fdata;
-		if (!GetFileAttributesEx(fn.c_str(), GetFileExInfoStandard, &fdata))
-		{
-			wcout << prefix << L"* ********** error getting attributes " << fn << endl;
-			return;
-		}
-	}
-	if (item.type == DirItem::Stream) {
-		auto ix = fn.find(L"\\:");
-		if (ix != wstring::npos)
-			fn.erase(ix, 1);
-	}
-	FileSimple fs(fn.c_str());
-	if(!fs.IsOpen())
-		wcout << prefix << L"* ********** error opening " << fn << endl;
-	// GetFileInformationByHandle  BY_HANDLE_FILE_INFORMATION
 }
 
-//void WriteTarStream(ITarWriter * writer, const DirItem& item,
-//	const filesystem::path& rel_path, const wstring& prefix)
-//{
-//	//wcout << prefix << L"+ " << item.name.c_str() << endl;
-//	//wcout << prefix << L"+ " << (rel_path / item.name.filename()).c_str() << endl;
-//	wcout << prefix << L"+ " << item.name.filename().c_str() << L"    " << item.size << endl;
-//	// directory name "dir\\:stream" -> "dir:stream"
-//}
+void WriteTarFile(ITarWriter * writer, const DirItem& item, const vector<wstring>& exclude, const filesystem::path& rel_path, const wstring& prefix)
+{
+	if (writer->IsMyFile(item.name)) // do not add tar itself to the tar
+		return;
 
+	PrintFileData(item, rel_path, prefix);
+
+	FileSimple fs(item.name.c_str());
+	if (!fs.IsOpen())
+	{
+		wcout << prefix << L"* ********** error opening " << item.name << endl;
+		return;
+	}
+	// GetFileInformationByHandle  BY_HANDLE_FILE_INFORMATION
+	//	write streams
+	TarFiles(writer, get_streams(item.name, L""), exclude, rel_path, prefix);
+}
+
+void WriteTarStream(ITarWriter * writer, const DirItem& item, const filesystem::path& rel_path, const wstring& prefix)
+{
+	PrintFileData(item, rel_path, prefix);
+
+	wstring fn = item.name.c_str();
+	// directory name "dir\\:stream" -> "dir:stream"
+	auto ix = fn.find(L"\\:");
+	if (ix != wstring::npos)
+		fn.erase(ix, 1);
+	FileSimple fs(fn.c_str());
+	if (!fs.IsOpen())
+	{
+		wcout << prefix << L"* ********** error opening " << fn << endl;
+		return;
+	}
+}
 
 int Tar(int argc, TCHAR **argv)
 {
@@ -237,23 +250,24 @@ int Tar(int argc, TCHAR **argv)
 	if (set_ext)
 		tarname.replace_extension(L".star");
 
-	wcout << L"Writing " << tarname.c_str() << endl;
+	wcout << L"Writing " << tarname.c_str();
 	if(test)
-		wcout << L", test\n";
+		wcout << L", test";
 	if(part_size)
-		wcout << L", block size=" << part_size << endl;
+		wcout << L", block size=" << part_size;
 	if (!pass.empty())
-		wcout << L", pass=" << pass << endl;
+		wcout << L", pass=" << pass;
 	if (!exclude.empty())
-		wcout << L"exclude=" << exclude << endl;
+		wcout << L", exclude=" << exclude;
 	if (!items.empty())
-		wcout << L"items=" << items << endl;
-	wcout << endl;
+		wcout << L", items=" << items;
+	else
+		wcout << L", current dir";
+	wcout << endl << endl;
 
-	//if (items.empty() || (items.size() == 1 && items[0] == L"."))
-	//	items = directory_items(filesystem::current_path());
-	// TODO generator from items
-	auto gen = directory_items(filesystem::current_path());
+	auto gen = items.empty() ?
+		get_files(filesystem::current_path()) : 
+		get_files_multi(items);
 
 	unique_ptr<ITarWriter> writer(
 		test ? (ITarWriter*)new TarWriterTest() :

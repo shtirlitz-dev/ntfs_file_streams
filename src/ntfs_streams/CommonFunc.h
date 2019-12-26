@@ -25,12 +25,12 @@
 std::wstring_view RemoveAtEnd(std::wstring_view str, std::wstring_view end);
 std::wstring FileSizeStr(ULONGLONG fsize);
 std::vector<std::wstring> split(std::wstring_view str, wchar_t delim);
-bool mask_match(const wchar_t* str, const std::wstring_view& masks);
+bool mask_match(const wchar_t* str, const wchar_t* mask);
 bool mask_match(const wchar_t* str, const std::vector<std::wstring> &masks);
 
 struct DirItem
 {
-	enum Type { Dir, File, Stream };
+	enum Type { Dir, File, Stream, Invalid };
 	Type type;
 	std::filesystem::path name;
 	ULONGLONG size;
@@ -38,5 +38,8 @@ struct DirItem
 	FILETIME ftLastWriteTime;
 };
 
-std::experimental::generator<DirItem> get_streams(std::filesystem::path entry, const wchar_t * sep);
-std::experimental::generator<DirItem> directory_items(std::filesystem::path path);
+bool is_stream_name(const wchar_t* entry);
+std::experimental::generator<DirItem> get_streams(std::filesystem::path entry, const wchar_t* sep);
+std::experimental::generator<DirItem> get_files(std::filesystem::path path); // WinAPI
+std::experimental::generator<DirItem> directory_items(std::filesystem::path path); // std::filesystem
+std::experimental::generator<DirItem> get_files_multi(const std::vector<std::filesystem::path>& items);

@@ -37,3 +37,4 @@ bin/
 
 # Visual Studio files
 .vs/
+*.user
