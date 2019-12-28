@@ -20,5 +20,5 @@
 bool IsUtf8(const char * buf, int count, bool itsAll);
 bool IsUnicodeLE(char * buf, int count);
 bool IsUnicodeBE(char * buf, int count);
-std::wstring ToWideChar(const std::string str, UINT codepage); // CP_ACP, CP_UTF8
-std::string ToChar(const std::wstring str, UINT codepage); // CP_ACP, CP_UTF8
+std::wstring ToWideChar(std::string_view str, UINT codepage); // CP_ACP, CP_UTF8
+std::string ToChar(std::wstring_view str, UINT codepage); // CP_ACP, CP_UTF8

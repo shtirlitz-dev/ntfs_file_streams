@@ -62,25 +62,25 @@ bool IsUnicodeBE(char * buf, int count)
 	return (nFlags & IS_TEXT_UNICODE_REVERSE_STATISTICS) != 0;
 }
 
-std::wstring ToWideChar(const std::string str, UINT codepage)
+std::wstring ToWideChar(std::string_view str, UINT codepage)
 {
-	int count = str.empty() ? 0 : ::MultiByteToWideChar(codepage, 0, str.c_str(), (int)str.size(), nullptr, 0);
+	int count = str.empty() ? 0 : ::MultiByteToWideChar(codepage, 0, str.data(), (int)str.size(), nullptr, 0);
 	if (count <= 0)
 		return std::wstring();
 
 	std::wstring strWide(count, L'\0');
-	::MultiByteToWideChar(codepage, 0, str.c_str(), (int)str.size(), strWide.data(), count);
+	::MultiByteToWideChar(codepage, 0, str.data(), (int)str.size(), strWide.data(), count);
 	return strWide;
 }
 
 
-std::string ToChar(const std::wstring str, UINT codepage) // CP_ACP, CP_UTF8
+std::string ToChar(std::wstring_view str, UINT codepage) // CP_ACP, CP_UTF8
 {
-	int count = str.empty() ? 0 : ::WideCharToMultiByte(codepage, 0, str.c_str(), (int)str.size(), nullptr, 0, nullptr, nullptr);
+	int count = str.empty() ? 0 : ::WideCharToMultiByte(codepage, 0, str.data(), (int)str.size(), nullptr, 0, nullptr, nullptr);
 	if (count <= 0)
 		return std::string();
 
 	std::string strChar(count, '\0');
-	::WideCharToMultiByte(codepage, 0, str.c_str(), (int)str.size(), strChar.data(), count, nullptr, nullptr);
+	::WideCharToMultiByte(codepage, 0, str.data(), (int)str.size(), strChar.data(), count, nullptr, nullptr);
 	return strChar;
 }
