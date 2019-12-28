@@ -30,9 +30,9 @@ using namespace std;
 
 int wmain(int argc, TCHAR **argv) // main(int argc, char **argv)
 {
-	_setmode(_fileno(stdout), _O_U16TEXT);  // enable Unicode in console
-	_setmode(_fileno(stdin), _O_U16TEXT);  // enable Unicode in console
-	_setmode(_fileno(stderr), _O_U16TEXT);  // enable Unicode in console
+	_setmode(_fileno(stdout), _O_U8TEXT);  // enable Unicode in console
+	_setmode(_fileno(stdin), _O_U8TEXT);  // enable Unicode in console
+	_setmode(_fileno(stderr), _O_U8TEXT);  // enable Unicode in console
 
 	try
 	{
