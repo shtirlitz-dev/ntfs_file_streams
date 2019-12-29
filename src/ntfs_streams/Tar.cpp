@@ -51,7 +51,8 @@ namespace
 		wcout << L"untar [options] <tar-file> [<dir>]\n";
 		wcout << L"where <dir> is directory to extract files from <tar-file> to, default is current\n";
 		wcout << L"options:\n";
-		wcout << L"  /l             - do not extract, only list file, directory and stream names\n";
+		wcout << L"  /t             - test: only list directories, files and streams\n";
+		wcout << L"  /o             - overwrite existing files\n";
 		wcout << L"  /p:password    - password to decrypt tar-file\n";
 		wcout << L"  /f:sym         - write streams as files, sym replaces ':'\n";
 		return 0;
@@ -233,13 +234,28 @@ void WriteData(ITarWriter * writer, FileSimple& fs, ULONGLONG total, const files
 	}
 }
 
+void PrintFileData(const DirItem& item, const filesystem::path& rel_path, const wstring& prefix)
+{
+	WORD wColor =
+		item.type == DirItem::Stream ? FOREGROUND_GREEN | FOREGROUND_BLUE :
+		item.type == DirItem::Dir ? FOREGROUND_RED | FOREGROUND_GREEN :
+		FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+	ConsoleColor cc(wColor);
+	//wcout << prefix << L"+ " << item.name.c_str() << endl;
+	//wcout << prefix << L"+ " << (rel_path / item.name.filename()).c_str() << endl;
+	auto sign = item.type == DirItem::Dir ? L"> " : L"+ ";
+	wcout << prefix << sign << item.name.filename().c_str();
+	//wcout << prefix << sign << item.name.c_str();
+	//wcout << prefix << sign << rel_path << L"   " << item.name.filename().c_str();
+	if(item.type != DirItem::Dir)
+		wcout << L"   " << item.size;
+	wcout << endl;
+}
+
 void WriteTarDirectory(ITarWriter * writer, const DirItem& item, const vector<wstring>& exclude,
 	const filesystem::path& rel_path, const wstring& prefix)
 {
-	{
-		ConsoleColor cc(FOREGROUND_RED | FOREGROUND_GREEN);
-		wcout << prefix << L"> " << item.name.filename().c_str() << endl;
-	}
+	PrintFileData(item, rel_path, prefix);
 	WriteDirItem(writer, item);
 //	TarFiles(writer, directory_items(item.name), exclude, rel_path / item.name.filename(), prefix + L"  ");
 	TarFiles(writer, get_files(item.name), exclude, rel_path / item.name.filename(), prefix + L"  ");
@@ -247,20 +263,13 @@ void WriteTarDirectory(ITarWriter * writer, const DirItem& item, const vector<ws
 	writer->Write(EndDir);
 }
 
-void PrintFileData(const DirItem& item, const filesystem::path& rel_path, const wstring& prefix, WORD wColor)
-{
-	ConsoleColor cc(wColor);
-	//wcout << prefix << L"+ " << item.name.c_str() << endl;
-	//wcout << prefix << L"+ " << (rel_path / item.name.filename()).c_str() << endl;
-	wcout << prefix << L"+ " << item.name.filename().c_str() << L"   " << item.size << endl;
-}
 
 void WriteTarFile(ITarWriter * writer, const DirItem& item, const vector<wstring>& exclude, const filesystem::path& rel_path, const wstring& prefix)
 {
 	if (writer->IsMyFile(item.name, false)) // do not add tar itself to the tar
 		return;
 
-	PrintFileData(item, rel_path, prefix, FOREGROUND_RED | FOREGROUND_GREEN| FOREGROUND_BLUE);
+	PrintFileData(item, rel_path, prefix);
 
 	FileSimple fs(item.name.c_str());
 	if (!fs.IsOpen())
@@ -277,18 +286,27 @@ void WriteTarFile(ITarWriter * writer, const DirItem& item, const vector<wstring
 	writer->Write(EndFile);
 }
 
+wstring CorrectDirStreamName(const filesystem::path& str_path)
+{
+	wstring fn = str_path.c_str();
+	// directory name "dir\\:stream" -> "dir:stream"
+	// but ".\\:stream" is ok and -> ".:stream" is invalid
+	// ex1\..\:dirstr.tx3 is valid
+	// ex1\..:dirstr.tx4 is invalid
+	auto ix = fn.find(L"\\:");
+	if (ix != wstring::npos && !(ix > 0 && fn[ix-1] == '.')) // ".\\:" is ok, "\\:" must be replaced
+		fn.erase(ix, 1);
+	return fn;
+}
+
 void WriteTarStream(ITarWriter * writer, const DirItem& item, const filesystem::path& rel_path, const wstring& prefix)
 {
 	if (writer->IsMyFile(item.name, true)) // do not add tar itself to the tar
 		return;
 
-	PrintFileData(item, rel_path, prefix, FOREGROUND_GREEN | FOREGROUND_BLUE);
+	PrintFileData(item, rel_path, prefix);
 
-	wstring fn = item.name.c_str();
-	// directory name "dir\\:stream" -> "dir:stream"
-	auto ix = fn.find(L"\\:");
-	if (ix != wstring::npos)
-		fn.erase(ix, 1);
+	wstring fn = CorrectDirStreamName(item.name);
 	FileSimple fs(fn.c_str());
 	if (!fs.IsOpen())
 	{
@@ -366,11 +384,224 @@ int Tar(int argc, TCHAR **argv)
 	wcout << writer->written_total << L" bytes wirtten in " << tarname.filename().c_str() << endl;
 	return 0;
 }
+
+class IReader
+{
+public:
+	virtual void Read(void* buf, DWORD size) = 0;
+	template<typename T>
+	void Read(T& t) { Read(&t, sizeof(T)); }
+};
+
+struct Options
+{
+	wstring stream_separator;
+	bool test = false;
+	bool overwrite = false;
+};
+
+void EnsureDirectoryExists(const filesystem::path& dir)
+{
+	if (!filesystem::exists(dir))
+		filesystem::create_directories(dir);
+	else if(!filesystem::is_directory(dir))
+		throw MyException{ L"Path is not a directory: '<path>'", dir.c_str(), 0 };
+}
+
+bool WriteTo(const wchar_t* dest, IReader* reader, ULONGLONG total, const Options& options, const wstring& prefix)
+{
+	// wcout << dest << endl;
+	FileSimple fs_out;
+	if (!options.test)
+	{
+		const wchar_t* msg = nullptr;
+		if (filesystem::exists(dest) && !options.overwrite)
+			msg = L"already exists";
+		else if (!fs_out.Open(dest, true, true))
+			msg = L"failed to create";
+		if (msg)
+		{
+			ConsoleColor cc(FOREGROUND_RED);
+			wcout << prefix << L"* " << dest << L"  *** " << msg << L" ***" << endl;
+		}
+	}
+
+	while (total != 0)
+	{
+		BYTE buf[64 * 1024];
+		SetLastError(0);
+		ULONGLONG to_read = sizeof(buf);
+		if (to_read > total)
+			to_read = total;
+		reader->Read(buf, (DWORD)to_read);
+		if (fs_out.IsOpen())
+		{
+			DWORD dwBytesWritten = fs_out.Write(buf, (DWORD)to_read);
+			if (dwBytesWritten != (DWORD)to_read)
+				throw MyException{ L"Failed to write '<path>': <err>", dest, GetLastError() };
+		}
+		total -= to_read;
+	}
+	return fs_out.IsOpen();
+}
+
+bool ExtractItem(IReader* reader, const Options& options, const filesystem::path& dest, const wstring& prefix)
+{
+	char type;
+	reader->Read(type);
+
+	DirItem di = {};
+	switch (type) {
+	case BeginDir:
+		di.type = DirItem::Dir;
+		break;
+	case BeginFile:
+		di.type = DirItem::File;
+		reader->Read(di.size);
+		reader->Read(di.dwFileAttributes);
+		reader->Read(di.ftLastWriteTime);
+		break;
+	case BeginStream:
+		di.type = DirItem::Stream;
+		reader->Read(di.size);
+		break;
+	case EndFile:
+	case EndDir:
+	case EndArchive:
+		return false;
+	default:
+		throw MyException{ L"Invalid tar file format", L"", 0 };
+	}
+
+	WORD wlen;
+	reader->Read(wlen);
+	std::string name_utf8(size_t(wlen), '\0');
+	reader->Read(name_utf8.data(), wlen);
+	wstring name = ToWideChar(name_utf8, CP_UTF8);
+	di.name = dest / name;
+
+	PrintFileData(di, dest, prefix);
+
+	if (di.type == DirItem::Stream && !options.stream_separator.empty()) {
+		// replace ':' with stream_separator
+		if (auto pos = name.find(L':'); pos != wstring::npos) {
+			name = name.substr(0, pos) + options.stream_separator + name.substr(pos + 1);
+			di.name = dest / name;
+		}
+	}
+
+
+	switch (di.type)
+	{
+	case DirItem::Dir: {
+		wstring next_prefix = prefix + L"  ";
+		if (!options.test)
+			EnsureDirectoryExists(di.name);
+		while (ExtractItem(reader, options, di.name, next_prefix)) {}   // write all streams
+		break;
+		}
+	case DirItem::File: {
+		bool written = WriteTo(di.name.c_str(), reader, di.size, options, prefix);
+		while (ExtractItem(reader, options, dest, prefix)) {}   // write all streams
+		if (written)
+		{ // set file attributes: this must be made after all the streams of this file is written
+			FileSimple f;
+			FILE_BASIC_INFO fbi;
+			bool done = false;
+			if (f.OpenForAttribs(di.name.c_str(), true) &&
+				f.GetAttribs(&fbi))
+			{
+				fbi.LastWriteTime = fbi.ChangeTime = (LARGE_INTEGER&)di.ftLastWriteTime;
+				fbi.FileAttributes = di.dwFileAttributes;
+				done = f.SetAttribs(&fbi);
+			}
+			if (!done)
+			{
+				ConsoleColor cc(FOREGROUND_RED);
+				wcout << prefix << L"* " << di.name.c_str() << L"  *** failed to set attributes *** " << endl;
+			}
+		}
+		break;
+		}
+	case DirItem::Stream:
+		WriteTo(CorrectDirStreamName(di.name).c_str(), reader, di.size, options, prefix);
+		break;
+	}
+	return true;
+}
+
+class FileReader : public IReader
+{
+	FileSimple &fs;
+	const wchar_t* name;
+public:
+	FileReader(FileSimple &fs, const wchar_t* name) : fs(fs), name(name) {}
+	virtual void Read(void* buf, DWORD size)
+	{
+		if (fs.Read(buf, size) != size)
+			throw MyException{ L"Failed to read '<path>': <err>", name, GetLastError() };
+	}
+};
+
 int Untar(int argc, TCHAR **argv)
 {
 	if (argc < 3 || _tcscmp(argv[2], L"/?") == 0)
 		return ShowHelpUntar(filesystem::path(argv[0]).filename());
 
-	wcout << L"tar/untar function is not implemented yet\n";
+	Options options;
+	ULONGLONG part_size = 0;
+	wstring pass;
+	filesystem::path tarname;
+	filesystem::path dest_dir;
+
+	for (int n = 2; n < argc; ++n)
+	{
+		wstring_view param(argv[n]);
+		if (param == L"/t")
+			options.test = true;
+		else if (param == L"/o")
+			options.overwrite = true;
+		else if (starts_with(param, L"/p:"))
+			pass = param.substr(3);
+		else if (starts_with(param, L"/f:"))
+			options.stream_separator = param.substr(3);
+		else if (starts_with(param, L"/"))
+			throw invalid_argument("unrecognized option");
+		else if (tarname.empty())
+			tarname = param;
+		else if (dest_dir.empty())
+			dest_dir = param;
+		else
+			throw invalid_argument("too many parameters");
+	}
+
+	wcout << L"Extracting " << tarname.c_str();
+	if (options.test)
+		wcout << L", test";
+	if (options.overwrite)
+		wcout << L", overwrite";
+	if (!pass.empty())
+		wcout << L", pass=" << pass;
+	if (dest_dir.empty())
+		dest_dir = L".";
+
+	if (dest_dir != L".")
+		wcout << L", in '" << dest_dir.c_str() << L"'";
+	else
+		wcout << L", in current dir";
+	wcout << endl << endl;
+
+	FileSimple fs(tarname.c_str());
+	if (!fs.IsOpen())
+		throw MyException{ L"Failed to open '<path>': <err>", tarname.c_str(), GetLastError() };
+	char mark[6] = { 0 };
+	if(fs.Read(mark,4) != 4 || strcmp(mark,"star") != 0)
+		throw MyException{ L"Wrong tar format '<path>'", tarname.c_str(), 0 };
+
+	if (!options.test)
+		EnsureDirectoryExists(dest_dir);
+	FileReader fr(fs, tarname.c_str());
+	while (ExtractItem(&fr, options, dest_dir, wstring())) {}
+
 	return 0;
 }

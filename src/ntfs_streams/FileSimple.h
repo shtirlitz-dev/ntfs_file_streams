@@ -37,6 +37,30 @@ public:
 		m_hFile = CreateFile(name, GENERIC_WRITE | GENERIC_READ, 0, 0, OPEN_ALWAYS, 0, 0);
 		return IsOpen();
 	}
+	bool OpenForAttribs(LPCTSTR name, bool bReadWrite) // for get/set attributes (bReadWrite or only read)
+	{
+		m_hFile = CreateFile(name,
+			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE | FILE_READ_ATTRIBUTES |
+			(bReadWrite ? FILE_WRITE_ATTRIBUTES : 0), 0, 0, OPEN_EXISTING, 0, 0);
+		return IsOpen();
+	}
+	bool GetAttribs(FILE_BASIC_INFO *pbi)
+	{
+		BY_HANDLE_FILE_INFORMATION fi;
+		if (!IsOpen() || !GetFileInformationByHandle(m_hFile, &fi))
+			return false;
+		(FILETIME&) pbi->CreationTime = fi.ftCreationTime;
+		(FILETIME&) pbi->LastAccessTime = fi.ftLastAccessTime;
+		(FILETIME&) pbi->LastWriteTime = fi.ftLastWriteTime;
+		(FILETIME&) pbi->ChangeTime = fi.ftLastWriteTime;
+		pbi->FileAttributes = fi.dwFileAttributes;
+		return true;
+	}
+	bool SetAttribs(FILE_BASIC_INFO *pbi)
+	{
+		return IsOpen() &&
+			SetFileInformationByHandle(m_hFile, FileBasicInfo, pbi, sizeof(FILE_BASIC_INFO));
+	}
 	bool IsOpen() { return m_hFile != INVALID_HANDLE_VALUE; }
 	void Close()
 	{
