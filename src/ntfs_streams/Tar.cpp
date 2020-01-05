@@ -21,8 +21,12 @@
 #include "FileSimple.h"
 #include "ConsoleColor.h"
 #include "UnicodeFuncts.h"
+#include "aes.h"
+#include "shaker.h"
+#include "sha1.h"
 #include <tchar.h>
 #include <iostream>
+#include <random>
 
 using namespace std;
 
@@ -38,7 +42,7 @@ namespace
 		wcout << L"Default file extension of tar-file is .star\n";
 		wcout << L"options:\n";
 		wcout << L"  /t             - test: valid console output but tar-file is not created\n";
-		wcout << L"  /b:size        - divide output in blocks of specified size, suffixes K, M, G\n";
+	//	wcout << L"  /b:size        - divide output in blocks of specified size, suffixes K, M, G\n";
 		wcout << L"  /p:password    - password to encrypt tar-file\n";
 		wcout << L"  /e:mask1;mask2 - masks to exclude files or directories\n";
 		return 0;
@@ -91,12 +95,27 @@ namespace
 		return o;
 	}
 
+	array<uint8_t, 16> random_iv()
+	{
+		typedef std::chrono::high_resolution_clock myclock;
+		long long cnt = myclock::now().time_since_epoch().count();
+
+		default_random_engine generator;
+		generator.seed(cnt);
+		uniform_int_distribution<int> distribution(0, 255);
+		array<uint8_t, 16> iv;
+		for (auto& el : iv)
+			el = (uint8_t)distribution(generator);
+		return iv;
+	}
+
 	class ITarWriter
 	{
 	public:
 		virtual ~ITarWriter() {}
 		virtual void Write(const void* buf, DWORD size) = 0;
 		virtual bool IsMyFile(const filesystem::path& path, bool is_stream) { return false; }
+		virtual void Flush() {}
 		ULONGLONG written_total = 0;
 		template<typename T>
 		void Write(const T& t) { Write(&t, sizeof(T)); }
@@ -129,9 +148,10 @@ namespace
 			if (!fs.IsOpen()) {
 				if(!fs.Open(name.c_str(), true, true))
 					throw MyException{ L"Failed to create '<path>': <err>", name.c_str(), GetLastError() };
-				if (fs.Write("star", 4) != 4)
-					throw MyException{ L"Failed to write to '<path>': <err>", name.c_str(), GetLastError() };
-				written_total += 4;
+				// do not write signature
+				//if (fs.Write("star", 4) != 4)
+				//	throw MyException{ L"Failed to write to '<path>': <err>", name.c_str(), GetLastError() };
+				//written_total += 4;
 			}
 			if (fs.Write(buf, size) != size)
 				throw MyException{ L"Failed to write to '<path>': <err>", name.c_str(), GetLastError() };
@@ -149,6 +169,203 @@ namespace
 		{
 			written_total += size;
 		}
+	};
+
+	class TarWriterAES : public ITarWriter
+	{
+	public:
+		TarWriterAES(unique_ptr<ITarWriter>&& dst, const uint8_t* key16, const uint8_t* init_iv = nullptr)
+			: dst( move(dst) ), aes(key16, init_iv)
+		{
+			if (init_iv)
+			{
+				memcpy(data, init_iv, 16);
+				data_count = 16;
+			}
+		}
+		virtual void Write(const void* buf, DWORD size) override
+		{
+			if (data_count == 16) { // buffer can be full if it contains IV
+				dst->Write(data, 16);
+				data_count = 0;
+			}
+			const uint8_t* ptr = (const uint8_t*)buf;
+			while (size) {
+				if (size + data_count < 16) {
+					memcpy(data + data_count, ptr, size);
+					data_count += size;
+					break;
+				}
+				DWORD part = 16 - data_count;
+				memcpy(data + data_count, ptr, part);
+				size -= part;
+				ptr += part;
+				aes.encrypt(data, data);
+				dst->Write(data, 16);
+				data_count = 0;
+			}
+		}
+		virtual bool IsMyFile(const filesystem::path& path, bool is_stream) { return dst->IsMyFile(path, is_stream); }
+		virtual void Flush()  override
+		{
+			if (data_count > 0 && data_count < 16) { // if iv is not written yet (==16) => ok (nothing is written at all)
+				array<uint8_t, 16> rand = random_iv();
+				Write(rand.data(), 16 - data_count);
+			}
+			dst->Flush();
+		}
+	protected:
+		unique_ptr<ITarWriter> dst;
+		Aes128 aes;
+		uint8_t data[16];
+		DWORD data_count = 0;
+	};
+
+	class TarWriterShaker : public ITarWriter
+	{
+	public:
+		TarWriterShaker(unique_ptr<ITarWriter>&& dst, const uint8_t *key20)
+			: dst(move(dst)), shaker(key20)
+		{
+		}
+		virtual void Write(const void* buf, DWORD size) override
+		{
+			const uint8_t* ptr = (const uint8_t*)buf;
+			while (size) {
+				if (size + data_count < 32) {
+					memcpy(data + data_count, ptr, size);
+					data_count += size;
+					break;
+				}
+				DWORD part = 32 - data_count;
+				memcpy(data + data_count, ptr, part);
+				size -= part;
+				ptr += part;
+				shaker.encrypt(data, data);
+				dst->Write(data, 32);
+				data_count = 0;
+			}
+		}
+		virtual bool IsMyFile(const filesystem::path& path, bool is_stream) { return dst->IsMyFile(path, is_stream); }
+		virtual void Flush()  override
+		{
+			if (data_count > 0) {
+				array<uint8_t, 16> rand = random_iv();
+				// data_count [1 .. 31]
+				if (data_count < 16) {
+					// data_count [1 .. 15]
+					Write(rand.data(), 16);
+					// data_count [17 .. 31]
+					rand = random_iv();
+				} // else data_count [16 .. 31]
+				Write(rand.data(), 32 - data_count);
+			}
+
+			// finalize
+			dst->Flush();
+		}
+	protected:
+		unique_ptr<ITarWriter> dst;
+		Shaker shaker;
+		uint8_t data[32];
+		DWORD data_count = 0;
+	};
+
+
+
+	class ITarReader
+	{
+	public:
+		virtual void Read(void* buf, DWORD size) = 0;
+		template<typename T>
+		void Read(T& t) { Read(&t, sizeof(T)); }
+	};
+
+	class FileReader : public ITarReader
+	{
+		FileSimple &fs;
+		const wchar_t* name;
+	public:
+		FileReader(FileSimple &fs, const wchar_t* name) : fs(fs), name(name) {}
+		virtual void Read(void* buf, DWORD size) override
+		{
+			if (fs.Read(buf, size) != size)
+				throw MyException{ L"Failed to read '<path>': <err>", name, GetLastError() };
+		}
+	};
+
+	class TarReaderAES : public ITarReader
+	{
+	public:
+		TarReaderAES(unique_ptr<ITarReader>&& src, const uint8_t* key16, bool read_iv)
+			: src( move(src) ), aes(key16), read_iv(read_iv)
+		{
+		}
+		virtual void Read(void* buf, DWORD size) override
+		{
+			if (read_iv) {
+				src->Read(data, 16);
+				aes.reset_iv(data);
+				read_iv = false;
+			}
+			uint8_t* ptr = (uint8_t*)buf;
+			while (size) {
+				if (data_count >= size) {
+					memcpy(ptr, data + 16 - data_count, size);
+					data_count -= size;
+					break;
+				}
+				if (data_count) {
+					memcpy(ptr, data + 16 - data_count, data_count);
+					ptr += data_count;
+					size -= data_count;
+					data_count = 0;
+				}
+				src->Read(data, 16);
+				aes.decrypt(data, data);
+				data_count = 16;
+			}
+		}
+	protected:
+		unique_ptr<ITarReader> src;
+		Aes128 aes;
+		bool read_iv = false;
+		uint8_t data[16];
+		DWORD data_count = 0; // available in the end of data
+	};
+
+	class TarReaderShaker : public ITarReader
+	{
+	public:
+		TarReaderShaker(unique_ptr<ITarReader>&& src, const uint8_t *key20)
+			: src(move(src)), shaker(key20)
+		{
+		}
+		virtual void Read(void* buf, DWORD size) override
+		{
+			uint8_t* ptr = (uint8_t*)buf;
+			while (size) {
+				if (data_count >= size) {
+					memcpy(ptr, data + 32 - data_count, size);
+					data_count -= size;
+					break;
+				}
+				if (data_count) {
+					memcpy(ptr, data + 32 - data_count, data_count);
+					ptr += data_count;
+					size -= data_count;
+					data_count = 0;
+				}
+				src->Read(data, 32);
+				shaker.decrypt(data, data);
+				data_count = 32;
+			}
+		}
+	protected:
+		unique_ptr<ITarReader> src;
+		Shaker shaker;
+		uint8_t data[32];
+		DWORD data_count = 0;
 	};
 
 }
@@ -318,6 +535,16 @@ void WriteTarStream(ITarWriter * writer, const DirItem& item, const filesystem::
 	WriteData(writer, fs, item.size, item.name);
 }
 
+array<uint8_t, 16> digest_to_key(const array<uint8_t, 20>& digest)
+{
+	array<uint8_t, 16> key;
+	for (int i = 0; i < 16; ++i)
+		key[i] = digest[i] ^ digest[16 + (i % 4)];
+	return key;
+}
+
+
+
 int Tar(int argc, TCHAR **argv)
 {
 	if (argc < 3 || _tcscmp(argv[2], L"/?") == 0)
@@ -335,8 +562,8 @@ int Tar(int argc, TCHAR **argv)
 		wstring_view param(argv[n]);
 		if (param == L"/t")
 			test = true;
-		else if (starts_with(param, L"/b:"))
-			part_size = ReadSize(param.substr(3));
+//		else if (starts_with(param, L"/b:"))
+//			part_size = ReadSize(param.substr(3));
 		else if (starts_with(param, L"/p:"))
 			pass = param.substr(3);
 		else if (starts_with(param, L"/e:"))
@@ -378,20 +605,35 @@ int Tar(int argc, TCHAR **argv)
 		test ? (ITarWriter*)new TarWriterTest() :
 		(ITarWriter*)new TarWriterFiles(tarname, part_size) );
 
+	ITarWriter * end_writer = writer.get();
+
+	if (!test && !pass.empty()) {
+		vector<wstring> pw = split(pass, ',');
+		for (int i = (int)pw.size() - 1; i >= 0; --i) {
+			string utf8 = ToChar(pw[i], CP_UTF8);
+			array<uint8_t, 20> digest = sha1_digest(utf8.data(), (unsigned int) utf8.size());
+			unique_ptr<ITarWriter> dst = move(writer);
+			if (i & 1)
+				writer = unique_ptr<ITarWriter>(new TarWriterShaker(move(dst), digest.data()));
+			else {
+				array<uint8_t, 16> key = digest_to_key(digest);
+				array<uint8_t, 16> iv;
+				if (i == 0)
+					iv = random_iv();
+				writer = unique_ptr<ITarWriter>(new TarWriterAES(move(dst), key.data(), i == 0 ? iv.data() : nullptr));
+			}
+		}
+	}
+
+
 	TarFiles(writer.get(), std::move(gen), exclude, L"", L"");
 	writer->Write(EndArchive);
+	writer->Flush();
 
-	wcout << writer->written_total << L" bytes wirtten in " << tarname.filename().c_str() << endl;
+	wcout << FileSizeStr(end_writer->written_total) << L" bytes wirtten in " << tarname.filename().c_str() << endl;
 	return 0;
 }
 
-class IReader
-{
-public:
-	virtual void Read(void* buf, DWORD size) = 0;
-	template<typename T>
-	void Read(T& t) { Read(&t, sizeof(T)); }
-};
 
 struct Options
 {
@@ -408,7 +650,7 @@ void EnsureDirectoryExists(const filesystem::path& dir)
 		throw MyException{ L"Path is not a directory: '<path>'", dir.c_str(), 0 };
 }
 
-bool WriteTo(const wchar_t* dest, IReader* reader, ULONGLONG total, const Options& options, const wstring& prefix)
+bool WriteTo(const wchar_t* dest, ITarReader* reader, ULONGLONG total, const Options& options, const wstring& prefix)
 {
 	// wcout << dest << endl;
 	FileSimple fs_out;
@@ -445,7 +687,7 @@ bool WriteTo(const wchar_t* dest, IReader* reader, ULONGLONG total, const Option
 	return fs_out.IsOpen();
 }
 
-bool ExtractItem(IReader* reader, const Options& options, const filesystem::path& dest, const wstring& prefix)
+bool ExtractItem(ITarReader* reader, const Options& options, const filesystem::path& dest, const wstring& prefix)
 {
 	char type;
 	reader->Read(type);
@@ -470,13 +712,18 @@ bool ExtractItem(IReader* reader, const Options& options, const filesystem::path
 	case EndArchive:
 		return false;
 	default:
-		throw MyException{ L"Invalid tar file format", L"", 0 };
+		throw MyException{ L"Invalid tar file format or wrong password", L"", 0 };
 	}
 
 	WORD wlen;
 	reader->Read(wlen);
+	if(wlen > 500)
+		throw MyException{ L"Invalid tar file format or wrong password", L"", 0 };
 	std::string name_utf8(size_t(wlen), '\0');
 	reader->Read(name_utf8.data(), wlen);
+	if(!IsUtf8(name_utf8.data(), wlen, true))
+		throw MyException{ L"Invalid tar file format or wrong password", L"", 0 };
+
 	wstring name = ToWideChar(name_utf8, CP_UTF8);
 	di.name = dest / name;
 
@@ -530,18 +777,6 @@ bool ExtractItem(IReader* reader, const Options& options, const filesystem::path
 	return true;
 }
 
-class FileReader : public IReader
-{
-	FileSimple &fs;
-	const wchar_t* name;
-public:
-	FileReader(FileSimple &fs, const wchar_t* name) : fs(fs), name(name) {}
-	virtual void Read(void* buf, DWORD size)
-	{
-		if (fs.Read(buf, size) != size)
-			throw MyException{ L"Failed to read '<path>': <err>", name, GetLastError() };
-	}
-};
 
 int Untar(int argc, TCHAR **argv)
 {
@@ -594,14 +829,28 @@ int Untar(int argc, TCHAR **argv)
 	FileSimple fs(tarname.c_str());
 	if (!fs.IsOpen())
 		throw MyException{ L"Failed to open '<path>': <err>", tarname.c_str(), GetLastError() };
-	char mark[6] = { 0 };
-	if(fs.Read(mark,4) != 4 || strcmp(mark,"star") != 0)
-		throw MyException{ L"Wrong tar format '<path>'", tarname.c_str(), 0 };
 
 	if (!options.test)
 		EnsureDirectoryExists(dest_dir);
-	FileReader fr(fs, tarname.c_str());
-	while (ExtractItem(&fr, options, dest_dir, wstring())) {}
+
+	unique_ptr<ITarReader> reader(new FileReader(fs, tarname.c_str()) );
+
+	if (!pass.empty()) {
+		vector<wstring> pw = split(pass, ',');
+		for (int i = (int)pw.size() - 1; i >= 0; --i) {
+			string utf8 = ToChar(pw[i], CP_UTF8);
+			array<uint8_t, 20> digest = sha1_digest(utf8.data(), (unsigned int) utf8.size());
+			unique_ptr<ITarReader> src = move(reader);
+			if (i & 1)
+				reader = unique_ptr<ITarReader>(new TarReaderShaker(move(src), digest.data()));
+			else {
+				array<uint8_t, 16> key = digest_to_key(digest);
+				reader = unique_ptr<ITarReader>(new TarReaderAES(move(src), key.data(), i == 0));
+			}
+		}
+	}
+
+	while (ExtractItem(reader.get(), options, dest_dir, wstring())) {}
 
 	return 0;
 }

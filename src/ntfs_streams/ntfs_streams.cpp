@@ -30,6 +30,8 @@ using namespace std;
 
 int wmain(int argc, TCHAR **argv) // main(int argc, char **argv)
 {
+	//int test_aes();
+	//return test_aes();
 	_setmode(_fileno(stdout), _O_U8TEXT);  // enable Unicode in console
 	_setmode(_fileno(stdin), _O_U8TEXT);  // enable Unicode in console
 	_setmode(_fileno(stderr), _O_U8TEXT);  // enable Unicode in console

@@ -167,16 +167,20 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClInclude Include="aes.h" />
     <ClInclude Include="CommonFunc.h" />
     <ClInclude Include="ConsoleColor.h" />
     <ClInclude Include="FileSimple.h" />
     <ClInclude Include="ntfs_streams.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="sha1.h" />
+    <ClInclude Include="shaker.h" />
     <ClInclude Include="Tar.h" />
     <ClInclude Include="UnicodeFuncts.h" />
     <ClInclude Include="UnicodeStream.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="aes.cpp" />
     <ClCompile Include="CommonFunc.cpp" />
     <ClCompile Include="ConsoleColor.cpp" />
     <ClCompile Include="ntfs_streams.cpp" />
@@ -186,6 +190,8 @@
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="sha1.cpp" />
+    <ClCompile Include="shaker.cpp" />
     <ClCompile Include="Tar.cpp" />
     <ClCompile Include="UnicodeFuncts.cpp" />
     <ClCompile Include="UnicodeStream.cpp" />
