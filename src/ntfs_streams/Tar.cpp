@@ -27,8 +27,11 @@
 #include <tchar.h>
 #include <iostream>
 #include <random>
+#include <ratio>
+#include <chrono>
 
 using namespace std;
+using namespace std::chrono;
 
 namespace
 {
@@ -101,7 +104,7 @@ namespace
 		long long cnt = myclock::now().time_since_epoch().count();
 
 		default_random_engine generator;
-		generator.seed(cnt);
+		generator.seed((unsigned int)cnt);
 		uniform_int_distribution<int> distribution(0, 255);
 		array<uint8_t, 16> iv;
 		for (auto& el : iv)
@@ -169,6 +172,46 @@ namespace
 		{
 			written_total += size;
 		}
+	};
+
+	class TarWriterBuffer : public ITarWriter
+	{
+	public:
+		TarWriterBuffer(unique_ptr<ITarWriter>&& dst)
+			: dst(move(dst))
+		{
+
+		}
+		virtual void Write(const void* buf, DWORD size) override
+		{
+			const uint8_t* ptr = (const uint8_t*)buf;
+			while (size) {
+				if (size + data_count < sizeof(data)) {
+					memcpy(data + data_count, ptr, size);
+					data_count += size;
+					break;
+				}
+				DWORD part = sizeof(data) - data_count;
+				memcpy(data + data_count, ptr, part);
+				size -= part;
+				ptr += part;
+				dst->Write(data, sizeof(data));
+				data_count = 0;
+			}
+		}
+		virtual bool IsMyFile(const filesystem::path& path, bool is_stream) { return dst->IsMyFile(path, is_stream); }
+		virtual void Flush()  override
+		{
+			if (data_count > 0)
+				dst->Write(data, data_count);
+			data_count = 0;
+			// finalize
+			dst->Flush();
+		}
+	protected:
+		unique_ptr<ITarWriter> dst;
+		uint8_t data[4 * 1024];
+		DWORD data_count = 0;
 	};
 
 	class TarWriterAES : public ITarWriter
@@ -289,9 +332,31 @@ namespace
 		FileReader(FileSimple &fs, const wchar_t* name) : fs(fs), name(name) {}
 		virtual void Read(void* buf, DWORD size) override
 		{
-			if (fs.Read(buf, size) != size)
-				throw MyException{ L"Failed to read '<path>': <err>", name, GetLastError() };
+			uint8_t* ptr = (uint8_t*)buf;
+			while (size) {
+				DWORD in_buf = data_count - data_read;
+				if (in_buf >= size) { // we can all get from buffer
+					memcpy(ptr, data + data_read, size);
+					data_read += size;
+					break;
+				}
+				// we need data, our buffer is not enough
+				if (in_buf > 0) {
+					memcpy(ptr, data + data_read, in_buf);
+					ptr += in_buf;
+					size -= in_buf;
+				}
+				// size > 0
+				data_read = 0;
+				data_count = fs.Read(data, sizeof(data));
+				if(!data_count)
+					throw MyException{ L"Failed to read '<path>': <err>", name, GetLastError() };
+			}
 		}
+	protected:
+		uint8_t data[4 * 1024];
+		DWORD data_count = 0; // bytes in buffer
+		DWORD data_read = 0;  // consumed bytes
 	};
 
 	class TarReaderAES : public ITarReader
@@ -607,6 +672,9 @@ int Tar(int argc, TCHAR **argv)
 
 	ITarWriter * end_writer = writer.get();
 
+	if (!test)
+		writer = unique_ptr<ITarWriter>(new TarWriterBuffer(move(writer)));
+
 	if (!test && !pass.empty()) {
 		vector<wstring> pw = split(pass, ',');
 		for (int i = (int)pw.size() - 1; i >= 0; --i) {
@@ -626,11 +694,17 @@ int Tar(int argc, TCHAR **argv)
 	}
 
 
+	high_resolution_clock::time_point begin_time = high_resolution_clock::now();
+
 	TarFiles(writer.get(), std::move(gen), exclude, L"", L"");
 	writer->Write(EndArchive);
 	writer->Flush();
 
-	wcout << FileSizeStr(end_writer->written_total) << L" bytes wirtten in " << tarname.filename().c_str() << endl;
+	high_resolution_clock::time_point end_time = high_resolution_clock::now();
+	duration<double> time_span = duration_cast<duration<double>>(end_time - begin_time);
+
+	wcout << FileSizeStr(end_writer->written_total) << L" bytes wirtten in " << tarname.filename().c_str()
+		<< L" (" << time_span.count() << L" sec)" << endl;
 	return 0;
 }
 
@@ -850,7 +924,14 @@ int Untar(int argc, TCHAR **argv)
 		}
 	}
 
+	high_resolution_clock::time_point begin_time = high_resolution_clock::now();
+
 	while (ExtractItem(reader.get(), options, dest_dir, wstring())) {}
+
+	high_resolution_clock::time_point end_time = high_resolution_clock::now();
+	duration<double> time_span = duration_cast<duration<double>>(end_time - begin_time);
+
+	wcout << L"(" << time_span.count() << L" sec)" << endl;
 
 	return 0;
 }
